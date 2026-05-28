@@ -90,6 +90,7 @@ $(BUILD_APP)/Contents/MacOS/$(EXECUTABLE): $(SWIFT_SOURCES) swift/resources/Info
 	@cp "$(DARK_ICON_FILE)" "$(BUILD_APP)/Contents/Resources/AppIconDark.icns"
 	@printf "APPL????" > "$(BUILD_APP)/Contents/PkgInfo"
 	@xattr -cr "$(BUILD_APP)"
+	codesign --force --deep --sign - "$(BUILD_APP)"
 
 run: swift
 	open "$(BUILD_APP)"
