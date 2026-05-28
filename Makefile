@@ -31,7 +31,8 @@ DARK_ICON_SOURCE := swift/resources/AppIconDark.png
 ICON_FILE := $(BUILD_DIR)/AppIcon.icns
 DARK_ICON_FILE := $(BUILD_DIR)/AppIconDark.icns
 ICON_FLATTEN_TOOL := $(BUILD_DIR)/FlattenIcon
-ICON_BACKGROUND := ffffff
+LIGHT_ICON_BACKGROUND := ffffff
+DARK_ICON_BACKGROUND := 111111
 
 .PHONY: all app swift dist dmg icon-from-png clean clean-cache run
 
@@ -60,10 +61,10 @@ dmg: dist
 	@rm -rf "$(DMG_ROOT)"
 
 $(ICON_FILE): $(ICON_SOURCE) $(ICON_FLATTEN_TOOL)
-	$(MAKE) icon-from-png ICON_INPUT="$(ICON_SOURCE)" ICON_OUTPUT="$@"
+	$(MAKE) icon-from-png ICON_INPUT="$(ICON_SOURCE)" ICON_OUTPUT="$@" ICON_BACKGROUND="$(LIGHT_ICON_BACKGROUND)"
 
 $(DARK_ICON_FILE): $(DARK_ICON_SOURCE) $(ICON_FLATTEN_TOOL)
-	$(MAKE) icon-from-png ICON_INPUT="$(DARK_ICON_SOURCE)" ICON_OUTPUT="$@"
+	$(MAKE) icon-from-png ICON_INPUT="$(DARK_ICON_SOURCE)" ICON_OUTPUT="$@" ICON_BACKGROUND="$(DARK_ICON_BACKGROUND)"
 
 $(ICON_FLATTEN_TOOL): swift/tools/FlattenIcon.swift
 	@mkdir -p "$(BUILD_DIR)"
