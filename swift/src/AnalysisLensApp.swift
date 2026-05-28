@@ -81,6 +81,33 @@ enum AppAccent {
     ]
 }
 
+enum UsageMode: Equatable {
+    case lens
+    case focalRange
+
+    var title: String {
+        switch self {
+        case .lens:
+            return "Lens"
+        case .focalRange:
+            return "Focal"
+        }
+    }
+
+    var chartTitle: String {
+        "\(title) Usage"
+    }
+
+    var toggleHelp: String {
+        switch self {
+        case .lens:
+            return "Show focal length usage"
+        case .focalRange:
+            return "Show lens usage"
+        }
+    }
+}
+
 final class AppModel: ObservableObject {
     @Published var photoPath = AppModel.savedPhotoPath()
     @Published var processed = 0
@@ -94,6 +121,7 @@ final class AppModel: ObservableObject {
     @Published var highlightedLens: String?
     @Published var chartHighlightedLens: String?
     @Published var selectedDayKey: String?
+    @Published var usageMode = UsageMode.lens
 
     var progressFraction: Double {
         guard total > 0 else {
@@ -112,6 +140,37 @@ final class AppModel: ObservableObject {
 
     var lensCount: Int {
         result.lensTotals.count
+    }
+
+    var activeDayUsages: [LensDayUsage] {
+        switch usageMode {
+        case .lens:
+            return result.dayUsages
+        case .focalRange:
+            return result.focalRangeDayUsages
+        }
+    }
+
+    var activeUsageTotals: [LensTotal] {
+        switch usageMode {
+        case .lens:
+            return result.lensTotals
+        case .focalRange:
+            return result.focalRangeTotals
+        }
+    }
+
+    var activeUsageNames: [String] {
+        switch usageMode {
+        case .lens:
+            return result.lensNames
+        case .focalRange:
+            return result.focalRangeNames
+        }
+    }
+
+    var activeUsageTotalCount: Int {
+        max(1, activeUsageTotals.map(\.count).reduce(0, +))
     }
 
     var issueCount: Int {
@@ -180,7 +239,7 @@ final class AppModel: ObservableObject {
     }
 
     func color(for lens: String) -> Color {
-        guard let index = result.lensNames.firstIndex(of: lens) else {
+        guard let index = activeUsageNames.firstIndex(of: lens) else {
             return .secondary
         }
         return AppAccent.palette[index % AppAccent.palette.count]
@@ -214,6 +273,26 @@ final class AppModel: ObservableObject {
         selectedDayKey = nil
         highlightedLens = nil
         chartHighlightedLens = nil
+    }
+
+    func toggleUsageMode() {
+        usageMode = usageMode == .lens ? .focalRange : .lens
+        clearHighlight()
+    }
+
+    func clearMetadataCache() {
+        guard !isRunning else {
+            return
+        }
+
+        let result = LensAnalyzer.clearMetadataCaches()
+        if result.failed > 0 {
+            phase = "Cache clear failed. Removed \(result.removed), failed \(result.failed)"
+        } else if result.removed > 0 {
+            phase = "Cache cleared. Removed \(result.removed) file\(result.removed == 1 ? "" : "s")"
+        } else {
+            phase = "No cache files to clear"
+        }
     }
 
     private func apply(_ update: AnalysisProgressUpdate) {
@@ -446,6 +525,14 @@ struct RunPanel: View {
                     .buttonStyle(IconButtonStyle(tint: AppAccent.analyzed))
                     .disabled(model.isRunning || !model.canAnalyze)
 
+                    Button(action: model.clearMetadataCache) {
+                        Label("Cache", systemImage: "trash")
+                            .frame(width: 88)
+                    }
+                    .buttonStyle(IconButtonStyle(tint: AppAccent.warning, role: .destructive))
+                    .disabled(model.isRunning)
+                    .help("Delete cached metadata")
+
                     LiquidProgressBar(value: model.progressFraction)
                         .frame(height: 14)
 
@@ -629,15 +716,15 @@ struct ResultsPanel: View {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("Lens Usage")
+                        Text(model.usageMode.chartTitle)
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(AppAccent.lens)
 
                         Spacer()
                     }
 
-                    LensStackedBarChart(days: model.result.dayUsages,
-                                        lensNames: model.result.lensNames)
+                    LensStackedBarChart(days: model.activeDayUsages,
+                                        lensNames: model.activeUsageNames)
                         .frame(minHeight: 260)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1003,22 +1090,34 @@ struct LensRankingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Lens")
-                .font(.system(size: 14, weight: .bold))
+            Button(action: model.toggleUsageMode) {
+                HStack(spacing: 6) {
+                    Text(model.usageMode.title)
+                        .font(.system(size: 14, weight: .bold))
+
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 11, weight: .bold))
+
+                    Spacer()
+                }
                 .foregroundStyle(AppAccent.photo)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(model.usageMode.toggleHelp)
 
             ScrollView {
                 VStack(spacing: 8) {
-                    ForEach(model.result.lensTotals) { item in
-                        LensRankRow(item: item, total: max(1, model.analyzed))
+                    ForEach(model.activeUsageTotals) { item in
+                        LensRankRow(item: item, total: model.activeUsageTotalCount)
                     }
 
                     Spacer(minLength: 18)
-        .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            model.clearHighlight()
-        }
+                }
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.clearHighlight()
                 }
             }
         }
