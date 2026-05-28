@@ -20,6 +20,10 @@ struct AnalysisLensApp: App {
         .windowStyle(HiddenTitleBarWindowStyle())
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandMenu("Tools") {
+                Button("Delete Metadata Cache", action: model.clearMetadataCache)
+                    .disabled(model.isRunning)
+            }
         }
     }
 }
@@ -524,14 +528,6 @@ struct RunPanel: View {
                     }
                     .buttonStyle(IconButtonStyle(tint: AppAccent.analyzed))
                     .disabled(model.isRunning || !model.canAnalyze)
-
-                    Button(action: model.clearMetadataCache) {
-                        Label("Cache", systemImage: "trash")
-                            .frame(width: 88)
-                    }
-                    .buttonStyle(IconButtonStyle(tint: AppAccent.warning, role: .destructive))
-                    .disabled(model.isRunning)
-                    .help("Delete cached metadata")
 
                     LiquidProgressBar(value: model.progressFraction)
                         .frame(height: 14)
