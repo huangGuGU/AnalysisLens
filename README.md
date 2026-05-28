@@ -56,4 +56,4 @@ AnalysisLens 是一个原生 macOS SwiftUI 工具，用来从照片 EXIF 信息�
 
 ## Version
 
-Current version: `v1.3.0`
+Current version: `v1.3.1`
