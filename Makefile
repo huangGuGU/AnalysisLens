@@ -30,6 +30,8 @@ ICON_SOURCE := swift/resources/AppIcon.png
 DARK_ICON_SOURCE := swift/resources/AppIconDark.png
 ICON_FILE := $(BUILD_DIR)/AppIcon.icns
 DARK_ICON_FILE := $(BUILD_DIR)/AppIconDark.icns
+ICON_FLATTEN_TOOL := $(BUILD_DIR)/FlattenIcon
+ICON_BACKGROUND := ffffff
 
 .PHONY: all app swift dist dmg icon-from-png clean clean-cache run
 
@@ -57,29 +59,34 @@ dmg: dist
 	hdiutil create -volname "$(APP_NAME)" -srcfolder "$(CURDIR)/$(DMG_ROOT)" -ov -format UDZO "$(CURDIR)/$(DMG_FILE)"
 	@rm -rf "$(DMG_ROOT)"
 
-$(ICON_FILE): $(ICON_SOURCE)
+$(ICON_FILE): $(ICON_SOURCE) $(ICON_FLATTEN_TOOL)
 	$(MAKE) icon-from-png ICON_INPUT="$(ICON_SOURCE)" ICON_OUTPUT="$@"
 
-$(DARK_ICON_FILE): $(DARK_ICON_SOURCE)
+$(DARK_ICON_FILE): $(DARK_ICON_SOURCE) $(ICON_FLATTEN_TOOL)
 	$(MAKE) icon-from-png ICON_INPUT="$(DARK_ICON_SOURCE)" ICON_OUTPUT="$@"
 
-icon-from-png:
-	@rm -rf "$(ICON_OUTPUT).iconset"
+$(ICON_FLATTEN_TOOL): swift/tools/FlattenIcon.swift
+	@mkdir -p "$(BUILD_DIR)"
+	$(SWIFTC) $(SWIFTFLAGS) swift/tools/FlattenIcon.swift -o "$@"
+
+icon-from-png: $(ICON_FLATTEN_TOOL)
+	@rm -rf "$(ICON_OUTPUT).iconset" "$(ICON_OUTPUT).flattened.png"
 	@mkdir -p "$(ICON_OUTPUT).iconset"
-	sips -z 16 16 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_16x16.png"
-	sips -z 32 32 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_16x16@2x.png"
-	sips -z 32 32 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_32x32.png"
-	sips -z 64 64 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_32x32@2x.png"
-	sips -z 128 128 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_128x128.png"
-	sips -z 256 256 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_128x128@2x.png"
-	sips -z 256 256 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_256x256.png"
-	sips -z 512 512 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_256x256@2x.png"
-	sips -z 512 512 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_512x512.png"
-	sips -z 1024 1024 "$(ICON_INPUT)" --out "$(ICON_OUTPUT).iconset/icon_512x512@2x.png"
+	"$(ICON_FLATTEN_TOOL)" "$(ICON_INPUT)" "$(ICON_OUTPUT).flattened.png" "$(ICON_BACKGROUND)"
+	sips -z 16 16 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_16x16.png"
+	sips -z 32 32 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_16x16@2x.png"
+	sips -z 32 32 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_32x32.png"
+	sips -z 64 64 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_32x32@2x.png"
+	sips -z 128 128 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_128x128.png"
+	sips -z 256 256 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_128x128@2x.png"
+	sips -z 256 256 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_256x256.png"
+	sips -z 512 512 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_256x256@2x.png"
+	sips -z 512 512 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_512x512.png"
+	sips -z 1024 1024 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_512x512@2x.png"
 	xattr -cr "$(ICON_OUTPUT).iconset"
 	iconutil -c icns "$(ICON_OUTPUT).iconset" -o "$(ICON_OUTPUT)"
 	xattr -cr "$(ICON_OUTPUT)"
-	@rm -rf "$(ICON_OUTPUT).iconset"
+	@rm -rf "$(ICON_OUTPUT).iconset" "$(ICON_OUTPUT).flattened.png"
 
 $(BUILD_APP)/Contents/MacOS/$(EXECUTABLE): $(SWIFT_SOURCES) swift/resources/Info.plist $(ICON_FILE) $(DARK_ICON_FILE)
 	@mkdir -p "$(BUILD_APP)/Contents/MacOS" "$(BUILD_APP)/Contents/Resources"
