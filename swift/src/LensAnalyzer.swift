@@ -57,10 +57,10 @@ final class LensAnalyzer {
     ]
     private let focalRangeNames = [
         "10-24mm",
-        "24-40mm",
+        "25-40mm",
         "41-60mm",
         "61-135mm",
-        "135-200mm",
+        "136-200mm",
         "201+mm"
     ]
 
@@ -587,11 +587,12 @@ private final class LensMetadataCache {
         .appendingPathComponent("AnalysisLens", isDirectory: true)
 
     private static let cacheURL = cacheDirectory
-        .appendingPathComponent("lens-metadata-cache-v4.json")
+        .appendingPathComponent("lens-metadata-cache-v5.json")
 
     private static let cacheURLs = [
         "lens-metadata-cache-v2.json",
         "lens-metadata-cache-v3.json",
-        "lens-metadata-cache-v4.json"
+        "lens-metadata-cache-v4.json",
+        "lens-metadata-cache-v5.json"
     ].map { cacheDirectory.appendingPathComponent($0) }
 }
