@@ -637,7 +637,7 @@ struct LensStackedBarChart: View {
             let x = xPosition(forDayIndex: index, metrics: metrics)
             var y = chartHeight
 
-            for lens in lensNames {
+            for lens in stackedLensNames() {
                 let count = day.counts[lens] ?? 0
                 guard count > 0 else {
                     continue
@@ -724,7 +724,7 @@ struct LensStackedBarChart: View {
         let maxTotal = max(days.map(\.total).max() ?? 1, 1)
         var y = chartHeight
 
-        for lens in lensNames {
+        for lens in stackedLensNames() {
             let count = day.counts[lens] ?? 0
             guard count > 0 else {
                 continue
@@ -773,6 +773,15 @@ struct LensStackedBarChart: View {
             return 1
         }
         return highlightedLens == lens ? 1 : 0.16
+    }
+
+    private func stackedLensNames() -> [String] {
+        guard let highlightedLens = model.chartHighlightedLens,
+              lensNames.contains(highlightedLens) else {
+            return lensNames
+        }
+
+        return [highlightedLens] + lensNames.filter { $0 != highlightedLens }
     }
 
     private func drawAxisLabels(context: inout GraphicsContext, metrics: ChartMetrics) {
