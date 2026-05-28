@@ -25,8 +25,41 @@ struct AnalysisLensApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var appearanceObservation: NSKeyValueObservation?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = nil
+        appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.updateApplicationIcon()
+            }
+        }
+    }
+
+    private func updateApplicationIcon() {
+        if usesDarkAppearance {
+            NSApp.applicationIconImage = iconImage(named: "AppIconDark")
+        } else {
+            NSApp.applicationIconImage = nil
+        }
+        NSApp.dockTile.display()
+    }
+
+    private var usesDarkAppearance: Bool {
+        let appearance = NSApp.effectiveAppearance.bestMatch(from: [
+            .aqua,
+            .darkAqua,
+            .accessibilityHighContrastAqua,
+            .accessibilityHighContrastDarkAqua
+        ])
+        return appearance == .darkAqua || appearance == .accessibilityHighContrastDarkAqua
+    }
+
+    private func iconImage(named name: String) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "icns") else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
     }
 }
 
@@ -49,7 +82,7 @@ enum AppAccent {
 }
 
 final class AppModel: ObservableObject {
-    @Published var photoPath = AppModel.defaultPhotoPath()
+    @Published var photoPath = AppModel.savedPhotoPath()
     @Published var processed = 0
     @Published var total = 0
     @Published var analyzed = 0
@@ -89,6 +122,10 @@ final class AppModel: ObservableObject {
         issueCount > 0
     }
 
+    var canAnalyze: Bool {
+        AppModel.isExistingDirectory(photoPath)
+    }
+
     func choosePhotoDirectory() {
         chooseDirectory(startingAt: photoPath) { [weak self] path in
             self?.photoPath = path
@@ -99,7 +136,14 @@ final class AppModel: ObservableObject {
         guard !isRunning else {
             return
         }
+        guard canAnalyze else {
+            phase = "Choose a photo folder"
+            return
+        }
 
+        let analysisPath = photoPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        photoPath = analysisPath
+        AppModel.savePhotoPath(analysisPath)
         isRunning = true
         processed = 0
         total = 0
@@ -112,7 +156,7 @@ final class AppModel: ObservableObject {
         selectedDayKey = nil
         phase = "Scanning photos"
 
-        let photoURL = URL(fileURLWithPath: photoPath)
+        let photoURL = URL(fileURLWithPath: analysisPath, isDirectory: true)
 
         DispatchQueue.global(qos: .userInitiated).async {
             let analyzer = LensAnalyzer()
@@ -212,28 +256,39 @@ final class AppModel: ObservableObject {
     }
 
     private func existingDirectoryOrFallback(_ path: String) -> String {
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
+        if AppModel.isExistingDirectory(path) {
             return path
         }
         return NSHomeDirectory()
     }
 
-    private static func defaultPhotoPath() -> String {
-        let year = Calendar.current.component(.year, from: Date())
-        let pictures = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Pictures", isDirectory: true)
-        let spaced = pictures.appendingPathComponent("\(year) 照片", isDirectory: true)
-        let compact = pictures.appendingPathComponent("\(year)照片", isDirectory: true)
+    private static func savedPhotoPath() -> String {
+        guard let path = UserDefaults.standard.string(forKey: photoPathDefaultsKey),
+              isExistingDirectory(path) else {
+            return ""
+        }
+        return path
+    }
 
+    private static func savePhotoPath(_ path: String) {
+        UserDefaults.standard.set(path, forKey: photoPathDefaultsKey)
+    }
+
+    private static func isExistingDirectory(_ path: String) -> Bool {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return false
+        }
         var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: spaced.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            return spaced.path
-        }
-        if FileManager.default.fileExists(atPath: compact.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            return compact.path
-        }
-        return spaced.path
+        return FileManager.default.fileExists(atPath: trimmed, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    private static let photoPathDefaultsKey = "lastAnalyzedPhotoPath"
+}
+
+private extension String {
+    var placeholderIfEmpty: String {
+        isEmpty ? "Choose a photo folder" : self
     }
 }
 
@@ -354,8 +409,9 @@ struct PathPanel: View {
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(AppAccent.photo)
 
-                    Text(path)
+                    Text(path.placeholderIfEmpty)
                         .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(path.isEmpty ? Color.secondary : Color.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -388,7 +444,7 @@ struct RunPanel: View {
                             .frame(width: 120)
                     }
                     .buttonStyle(IconButtonStyle(tint: AppAccent.analyzed))
-                    .disabled(model.isRunning)
+                    .disabled(model.isRunning || !model.canAnalyze)
 
                     LiquidProgressBar(value: model.progressFraction)
                         .frame(height: 14)
