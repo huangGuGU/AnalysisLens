@@ -32,7 +32,7 @@ ICON_FILE := $(BUILD_DIR)/AppIcon.icns
 DARK_ICON_FILE := $(BUILD_DIR)/AppIconDark.icns
 ICON_FLATTEN_TOOL := $(BUILD_DIR)/FlattenIcon
 LIGHT_ICON_BACKGROUND := ffffff
-DARK_ICON_BACKGROUND := 111111
+DARK_ICON_STROKE := 2f2f2f
 
 .PHONY: all app swift dist dmg icon-from-png clean clean-cache run
 
@@ -64,7 +64,7 @@ $(ICON_FILE): $(ICON_SOURCE) $(ICON_FLATTEN_TOOL)
 	$(MAKE) icon-from-png ICON_INPUT="$(ICON_SOURCE)" ICON_OUTPUT="$@" ICON_BACKGROUND="$(LIGHT_ICON_BACKGROUND)"
 
 $(DARK_ICON_FILE): $(DARK_ICON_SOURCE) $(ICON_FLATTEN_TOOL)
-	$(MAKE) icon-from-png ICON_INPUT="$(DARK_ICON_SOURCE)" ICON_OUTPUT="$@" ICON_BACKGROUND="$(DARK_ICON_BACKGROUND)"
+	$(MAKE) icon-from-png ICON_INPUT="$(DARK_ICON_SOURCE)" ICON_OUTPUT="$@" ICON_STROKE="$(DARK_ICON_STROKE)"
 
 $(ICON_FLATTEN_TOOL): swift/tools/FlattenIcon.swift
 	@mkdir -p "$(BUILD_DIR)"
@@ -73,7 +73,12 @@ $(ICON_FLATTEN_TOOL): swift/tools/FlattenIcon.swift
 icon-from-png: $(ICON_FLATTEN_TOOL)
 	@rm -rf "$(ICON_OUTPUT).iconset" "$(ICON_OUTPUT).flattened.png"
 	@mkdir -p "$(ICON_OUTPUT).iconset"
-	"$(ICON_FLATTEN_TOOL)" "$(ICON_INPUT)" "$(ICON_OUTPUT).flattened.png" "$(ICON_BACKGROUND)"
+	@if [ -n "$(ICON_BACKGROUND)" ]; then \
+		background="$(ICON_BACKGROUND)"; \
+	else \
+		background="none"; \
+	fi; \
+	"$(ICON_FLATTEN_TOOL)" "$(ICON_INPUT)" "$(ICON_OUTPUT).flattened.png" "$$background" "$(ICON_STROKE)"
 	sips -z 16 16 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_16x16.png"
 	sips -z 32 32 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_16x16@2x.png"
 	sips -z 32 32 "$(ICON_OUTPUT).flattened.png" --out "$(ICON_OUTPUT).iconset/icon_32x32.png"
