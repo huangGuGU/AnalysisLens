@@ -59,6 +59,8 @@ final class AppModel: ObservableObject {
     @Published var isRunning = false
     @Published var result = LensAnalysisResult()
     @Published var highlightedLens: String?
+    @Published var chartHighlightedLens: String?
+    @Published var selectedDayKey: String?
 
     var progressFraction: Double {
         guard total > 0 else {
@@ -77,6 +79,14 @@ final class AppModel: ObservableObject {
 
     var lensCount: Int {
         result.lensTotals.count
+    }
+
+    var issueCount: Int {
+        result.skippedIssues.count + result.failedIssues.count
+    }
+
+    var hasIssues: Bool {
+        issueCount > 0
     }
 
     func choosePhotoDirectory() {
@@ -98,6 +108,8 @@ final class AppModel: ObservableObject {
         failed = 0
         result = LensAnalysisResult()
         highlightedLens = nil
+        chartHighlightedLens = nil
+        selectedDayKey = nil
         phase = "Scanning photos"
 
         let photoURL = URL(fileURLWithPath: photoPath)
@@ -130,12 +142,34 @@ final class AppModel: ObservableObject {
         return AppAccent.palette[index % AppAccent.palette.count]
     }
 
-    func toggleHighlight(_ lens: String) {
-        highlightedLens = highlightedLens == lens ? nil : lens
+    func toggleChartHighlight(_ lens: String) {
+        if highlightedLens == lens, chartHighlightedLens == lens {
+            highlightedLens = nil
+            chartHighlightedLens = nil
+            return
+        }
+        highlightedLens = lens
+        chartHighlightedLens = lens
+    }
+
+    func highlightLensOnly(_ lens: String) {
+        highlightedLens = lens
+        chartHighlightedLens = nil
     }
 
     func clearHighlight() {
         highlightedLens = nil
+        chartHighlightedLens = nil
+    }
+
+    func selectDay(_ dateKey: String) {
+        selectedDayKey = dateKey
+    }
+
+    func clearChartSelection() {
+        selectedDayKey = nil
+        highlightedLens = nil
+        chartHighlightedLens = nil
     }
 
     private func apply(_ update: AnalysisProgressUpdate) {
@@ -157,14 +191,7 @@ final class AppModel: ObservableObject {
             title = "Complete"
         }
 
-        var message = "\(title). Photos \(result.totalPhotos)  Lens \(result.lensTotals.count)  Days \(result.dayUsages.count)  Cache \(result.cacheHits)  Skipped \(result.skipped)  Failed \(result.failed)  \(String(format: "%.1fs", result.elapsedSeconds))"
-        if let first = result.errors.first {
-            message += "  \(first)"
-            if result.errors.count > 1 {
-                message += "  +\(result.errors.count - 1) more"
-            }
-        }
-        return message
+        return "\(title). Photos \(result.totalPhotos)  Lens \(result.lensTotals.count)  Days \(result.dayUsages.count)  Cache \(result.cacheHits)  Skipped \(result.skipped)  Failed \(result.failed)  \(String(format: "%.1fs", result.elapsedSeconds))"
     }
 
     private func chooseDirectory(startingAt path: String, completion: @escaping (String) -> Void) {
@@ -349,6 +376,7 @@ struct PathPanel: View {
 
 struct RunPanel: View {
     @EnvironmentObject private var model: AppModel
+    @State private var showingIssueList = false
 
     var body: some View {
         GlassPanel(fillHeight: true) {
@@ -371,21 +399,169 @@ struct RunPanel: View {
                         .frame(width: 56, alignment: .trailing)
                 }
 
-                HStack(spacing: 12) {
-                    StatusDot(active: model.isRunning,
-                              warning: model.failed > 0 || model.skipped > 0)
-
-                    Text(model.phase)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    Spacer()
+                if model.hasIssues {
+                    Button {
+                        showingIssueList = true
+                    } label: {
+                        StatusLine(showDetailsIcon: true)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show skipped and failed files")
+                } else {
+                    StatusLine(showDetailsIcon: false)
                 }
             }
         }
         .frame(minHeight: 112, maxHeight: 124)
+        .sheet(isPresented: $showingIssueList) {
+            IssueListSheet(result: model.result)
+                .frame(minWidth: 760, idealWidth: 860, minHeight: 420, idealHeight: 520)
+        }
+    }
+}
+
+struct StatusLine: View {
+    @EnvironmentObject private var model: AppModel
+    let showDetailsIcon: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            StatusDot(active: model.isRunning,
+                      warning: model.failed > 0 || model.skipped > 0)
+
+            Text(model.phase)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if showDetailsIcon {
+                Image(systemName: "list.bullet.rectangle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppAccent.warning.opacity(0.88))
+            }
+
+            Spacer()
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+struct IssueListSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let result: LensAnalysisResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Skipped and Failed Files")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+
+                    Text("Skipped \(result.skippedIssues.count)  Failed \(result.failedIssues.count)")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button("Done") {
+                    dismiss()
+                }
+                .buttonStyle(IconButtonStyle(tint: AppAccent.photo))
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                IssueSection(title: "Skipped",
+                             count: result.skippedIssues.count,
+                             tint: AppAccent.warning,
+                             issues: result.skippedIssues)
+
+                IssueSection(title: "Failed",
+                             count: result.failedIssues.count,
+                             tint: Color.red.opacity(0.86),
+                             issues: result.failedIssues)
+            }
+        }
+        .padding(18)
+    }
+}
+
+struct IssueSection: View {
+    let title: String
+    let count: Int
+    let tint: Color
+    let issues: [LensIssue]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 8, height: 8)
+
+                Text(title)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+
+                Text("\(count)")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(tint)
+
+                Spacer()
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if issues.isEmpty {
+                        Text("No files")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 80)
+                    } else {
+                        ForEach(issues) { issue in
+                            IssueRow(issue: issue, tint: tint)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.thinMaterial)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(tint.opacity(0.24), lineWidth: 1)
+        }
+    }
+}
+
+struct IssueRow: View {
+    let issue: LensIssue
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(issue.reason)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tint)
+
+            Text(issue.path)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.045))
+        }
     }
 }
 
@@ -424,36 +600,41 @@ struct LensStackedBarChart: View {
     let lensNames: [String]
 
     var body: some View {
-        Canvas { context, size in
-            guard !days.isEmpty else {
-                return
+        GeometryReader { proxy in
+            Canvas { context, size in
+                guard !days.isEmpty else {
+                    return
+                }
+                drawChart(context: &context, size: size)
             }
-            drawChart(context: &context, size: size)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            model.clearHighlight()
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { value in
+                        handleChartTap(at: value.location, size: proxy.size)
+                    }
+            )
         }
         .overlay {
             if days.isEmpty {
                 EmptyChartState()
             }
         }
+        .animation(.easeOut(duration: 0.16), value: model.chartHighlightedLens)
         .animation(.easeOut(duration: 0.16), value: model.highlightedLens)
+        .animation(.easeOut(duration: 0.16), value: model.selectedDayKey)
     }
 
     private func drawChart(context: inout GraphicsContext, size: CGSize) {
-        let axisHeight: CGFloat = 54
-        let chartHeight = max(1, size.height - axisHeight)
+        let metrics = chartMetrics(for: size)
+        let chartHeight = metrics.chartHeight
         let maxTotal = max(days.map(\.total).max() ?? 1, 1)
-        let spacing = barSpacing(for: days.count)
-        let availableWidth = max(1, size.width - spacing * CGFloat(max(0, days.count - 1)))
-        let barWidth = max(1, availableWidth / CGFloat(max(1, days.count)))
+        let barWidth = metrics.barWidth
 
         drawGrid(context: &context, width: size.width, height: chartHeight)
 
         for (index, day) in days.enumerated() {
-            let x = CGFloat(index) * (barWidth + spacing)
+            let x = xPosition(forDayIndex: index, metrics: metrics)
             var y = chartHeight
 
             for lens in lensNames {
@@ -473,10 +654,7 @@ struct LensStackedBarChart: View {
             }
         }
 
-        drawAxisLabels(context: &context,
-                       chartHeight: chartHeight,
-                       barWidth: barWidth,
-                       spacing: spacing)
+        drawAxisLabels(context: &context, metrics: metrics)
     }
 
     private func drawGrid(context: inout GraphicsContext, width: CGFloat, height: CGFloat) {
@@ -490,6 +668,96 @@ struct LensStackedBarChart: View {
         }
     }
 
+    private func handleChartTap(at location: CGPoint, size: CGSize) {
+        guard !days.isEmpty else {
+            model.clearChartSelection()
+            return
+        }
+
+        let metrics = chartMetrics(for: size)
+        guard location.y >= 0, location.y <= size.height else {
+            model.clearChartSelection()
+            return
+        }
+
+        let step = metrics.barWidth + metrics.spacing
+        guard step > 0 else {
+            model.clearChartSelection()
+            return
+        }
+
+        let relativeX = location.x - metrics.leadingInset
+        guard relativeX >= 0 else {
+            model.clearChartSelection()
+            return
+        }
+
+        let dayIndex = Int(floor(relativeX / step))
+        guard days.indices.contains(dayIndex) else {
+            model.clearChartSelection()
+            return
+        }
+
+        let barX = xPosition(forDayIndex: dayIndex, metrics: metrics)
+        guard location.x >= barX, location.x <= barX + metrics.barWidth else {
+            model.clearChartSelection()
+            return
+        }
+
+        model.selectDay(days[dayIndex].dateKey)
+
+        guard location.y <= metrics.chartHeight else {
+            model.clearHighlight()
+            return
+        }
+
+        if let lens = lens(at: location,
+                           day: days[dayIndex],
+                           chartHeight: metrics.chartHeight) {
+            model.highlightLensOnly(lens)
+        } else {
+            model.clearHighlight()
+        }
+    }
+
+    private func lens(at location: CGPoint, day: LensDayUsage, chartHeight: CGFloat) -> String? {
+        let maxTotal = max(days.map(\.total).max() ?? 1, 1)
+        var y = chartHeight
+
+        for lens in lensNames {
+            let count = day.counts[lens] ?? 0
+            guard count > 0 else {
+                continue
+            }
+
+            let height = max(2, chartHeight * CGFloat(count) / CGFloat(maxTotal))
+            y -= height
+            let rect = CGRect(x: 0,
+                              y: max(0, y),
+                              width: .greatestFiniteMagnitude,
+                              height: min(height, chartHeight))
+            if rect.contains(CGPoint(x: 0, y: location.y)) {
+                return lens
+            }
+        }
+
+        return nil
+    }
+
+    private func chartMetrics(for size: CGSize) -> ChartMetrics {
+        let axisHeight: CGFloat = 54
+        let sideInset: CGFloat = 22
+        let chartHeight = max(1, size.height - axisHeight)
+        let spacing = barSpacing(for: days.count)
+        let availableWidth = max(1, size.width - sideInset * 2 - spacing * CGFloat(max(0, days.count - 1)))
+        let barWidth = max(1, availableWidth / CGFloat(max(1, days.count)))
+        return ChartMetrics(chartHeight: chartHeight,
+                            barWidth: barWidth,
+                            spacing: spacing,
+                            leadingInset: sideInset,
+                            trailingInset: sideInset)
+    }
+
     private func barSpacing(for count: Int) -> CGFloat {
         if count > 60 {
             return 1
@@ -501,67 +769,70 @@ struct LensStackedBarChart: View {
     }
 
     private func segmentOpacity(for lens: String) -> Double {
-        guard let highlightedLens = model.highlightedLens else {
+        guard let highlightedLens = model.chartHighlightedLens else {
             return 1
         }
         return highlightedLens == lens ? 1 : 0.16
     }
 
-    private func drawAxisLabels(context: inout GraphicsContext,
-                                chartHeight: CGFloat,
-                                barWidth: CGFloat,
-                                spacing: CGFloat) {
-        let labels = axisLabels(barWidth: barWidth, spacing: spacing)
+    private func drawAxisLabels(context: inout GraphicsContext, metrics: ChartMetrics) {
+        let labels = yearAxisLabels(metrics: metrics)
         for label in labels {
             var text = context.resolve(Text(label.text)
-                .font(axisLabelFont)
+                .font(yearAxisFont)
             )
-            text.shading = .color(Color.secondary.opacity(0.92))
-
-            var labelContext = context
-            labelContext.translateBy(x: label.x + 2, y: chartHeight + 44)
-            labelContext.rotate(by: .degrees(-45))
-            labelContext.draw(text, at: .zero, anchor: .topLeading)
+            text.shading = .color(Color.secondary.opacity(0.84))
+            context.draw(text, at: CGPoint(x: label.x, y: metrics.chartHeight + 10), anchor: .top)
         }
+
+        guard let selectedDayKey = model.selectedDayKey,
+              let selectedIndex = days.firstIndex(where: { $0.dateKey == selectedDayKey }) else {
+            return
+        }
+
+        let selectedX = xPosition(forDayIndex: selectedIndex, metrics: metrics) + metrics.barWidth / 2
+        drawSelectedDayLabel(context: &context,
+                             text: dayAxisLabel(selectedDayKey),
+                             x: selectedX,
+                             chartHeight: metrics.chartHeight)
     }
 
-    private func axisLabels(barWidth: CGFloat, spacing: CGFloat) -> [AxisLabel] {
-        let buckets = monthBuckets()
+    private func drawSelectedDayLabel(context: inout GraphicsContext,
+                                      text: String,
+                                      x: CGFloat,
+                                      chartHeight: CGFloat) {
+        guard !text.isEmpty else {
+            return
+        }
+
+        var tick = Path()
+        tick.move(to: CGPoint(x: x, y: chartHeight + 4))
+        tick.addLine(to: CGPoint(x: x, y: chartHeight + 12))
+        context.stroke(tick, with: .color(AppAccent.lens.opacity(0.88)), lineWidth: 1)
+
+        var resolved = context.resolve(Text(text)
+            .font(selectedDayAxisFont)
+        )
+        resolved.shading = .color(AppAccent.lens)
+        context.draw(resolved, at: CGPoint(x: x, y: chartHeight + 22), anchor: .top)
+    }
+
+    private func yearAxisLabels(metrics: ChartMetrics) -> [AxisLabel] {
+        let buckets = yearBuckets()
         guard !buckets.isEmpty else {
             return []
         }
 
-        let minimumLabelGap: CGFloat = 108
-        var labels: [AxisLabel] = []
-        var start = 0
-
-        while start < buckets.count {
-            var end = start
-            let startX = xPosition(forDayIndex: buckets[start].startIndex,
-                                   barWidth: barWidth,
-                                   spacing: spacing)
-
-            while end + 1 < buckets.count {
-                let nextX = xPosition(forDayIndex: buckets[end + 1].startIndex,
-                                      barWidth: barWidth,
-                                      spacing: spacing)
-                if nextX - startX >= minimumLabelGap {
-                    break
-                }
-                end += 1
-            }
-
-            labels.append(AxisLabel(text: labelText(from: buckets[start], to: buckets[end]),
-                                    x: startX))
-            start = end + 1
+        return buckets.map { bucket in
+            let startX = xPosition(forDayIndex: bucket.startIndex, metrics: metrics)
+            return AxisLabel(text: shortYear(bucket.year),
+                             x: startX + metrics.barWidth / 2)
         }
-
-        return labels
     }
 
-    private func monthBuckets() -> [MonthBucket] {
-        var buckets: [MonthBucket] = []
-        var current: (year: Int, month: Int)?
+    private func yearBuckets() -> [YearBucket] {
+        var buckets: [YearBucket] = []
+        var currentYear: Int?
         var startIndex = 0
 
         for (index, day) in days.enumerated() {
@@ -569,66 +840,51 @@ struct LensStackedBarChart: View {
                 continue
             }
 
-            if let value = current, value.year == yearMonth.year, value.month == yearMonth.month {
+            if currentYear == yearMonth.year {
                 continue
             }
 
-            if let value = current {
-                buckets.append(MonthBucket(year: value.year,
-                                           month: value.month,
-                                           startIndex: startIndex,
-                                           endIndex: max(startIndex, index - 1)))
+            if let year = currentYear {
+                buckets.append(YearBucket(year: year,
+                                          startIndex: startIndex,
+                                          endIndex: max(startIndex, index - 1)))
             }
 
-            current = yearMonth
+            currentYear = yearMonth.year
             startIndex = index
         }
 
-        if let value = current {
-            buckets.append(MonthBucket(year: value.year,
-                                       month: value.month,
-                                       startIndex: startIndex,
-                                       endIndex: max(startIndex, days.count - 1)))
+        if let year = currentYear {
+            buckets.append(YearBucket(year: year,
+                                      startIndex: startIndex,
+                                      endIndex: max(startIndex, days.count - 1)))
         }
 
         return buckets
-    }
-
-    private func labelText(from start: MonthBucket, to end: MonthBucket) -> String {
-        let startYear = shortYear(start.year)
-        let endYear = shortYear(end.year)
-        let startMonth = englishMonth(start.month)
-        let endMonth = englishMonth(end.month)
-
-        if start.year == end.year {
-            if start.month == end.month {
-                return "\(startMonth) '\(startYear)"
-            }
-            return "\(startMonth)-\(endMonth) '\(startYear)"
-        }
-
-        return "\(startMonth) '\(startYear)-\(endMonth) '\(endYear)"
     }
 
     private func shortYear(_ year: Int) -> String {
         String(format: "%02d", year % 100)
     }
 
-    private func englishMonth(_ month: Int) -> String {
-        let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-        guard (1...12).contains(month) else {
+    private func dayAxisLabel(_ value: String) -> String {
+        let parts = value.split(separator: ".")
+        guard parts.count == 3 else {
             return ""
         }
-        return names[month - 1]
+        return "\(parts[1]).\(parts[2])"
     }
 
-    private var axisLabelFont: Font {
-        .system(size: 10, weight: .medium, design: .rounded)
+    private var yearAxisFont: Font {
+        .system(size: 11, weight: .semibold, design: .rounded)
     }
 
-    private func xPosition(forDayIndex index: Int, barWidth: CGFloat, spacing: CGFloat) -> CGFloat {
-        CGFloat(index) * (barWidth + spacing)
+    private var selectedDayAxisFont: Font {
+        .system(size: 10, weight: .bold, design: .rounded)
+    }
+
+    private func xPosition(forDayIndex index: Int, metrics: ChartMetrics) -> CGFloat {
+        metrics.leadingInset + CGFloat(index) * (metrics.barWidth + metrics.spacing)
     }
 
     private func yearMonthParts(_ value: String) -> (year: Int, month: Int)? {
@@ -642,9 +898,8 @@ struct LensStackedBarChart: View {
         return (year, month)
     }
 
-    private struct MonthBucket {
+    private struct YearBucket {
         let year: Int
-        let month: Int
         let startIndex: Int
         let endIndex: Int
     }
@@ -652,6 +907,14 @@ struct LensStackedBarChart: View {
     private struct AxisLabel {
         let text: String
         let x: CGFloat
+    }
+
+    private struct ChartMetrics {
+        let chartHeight: CGFloat
+        let barWidth: CGFloat
+        let spacing: CGFloat
+        let leadingInset: CGFloat
+        let trailingInset: CGFloat
     }
 }
 
@@ -686,11 +949,11 @@ struct LensRankingView: View {
                     }
 
                     Spacer(minLength: 18)
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            model.clearHighlight()
-                        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            model.clearHighlight()
+        }
                 }
             }
         }
@@ -705,7 +968,7 @@ struct LensRankRow: View {
 
     var body: some View {
         Button {
-            model.toggleHighlight(item.lens)
+            model.toggleChartHighlight(item.lens)
         } label: {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {

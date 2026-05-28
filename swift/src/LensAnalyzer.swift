@@ -24,6 +24,12 @@ struct LensTotal: Identifiable {
     let count: Int
 }
 
+struct LensIssue: Identifiable {
+    let id = UUID()
+    let path: String
+    let reason: String
+}
+
 struct LensAnalysisResult {
     var totalPhotos = 0
     var analyzedPhotos = 0
@@ -36,6 +42,8 @@ struct LensAnalysisResult {
     var lensNames: [String] = []
     var elapsedSeconds = 0.0
     var errors: [String] = []
+    var skippedIssues: [LensIssue] = []
+    var failedIssues: [LensIssue] = []
 }
 
 final class LensAnalyzer {
@@ -51,8 +59,9 @@ final class LensAnalyzer {
         var result = LensAnalysisResult()
 
         guard isDirectory(photoDirectory) else {
-            result.failed += 1
-            result.errors.append("Photo path is not a directory: \(photoDirectory.path)")
+            recordFailed(path: photoDirectory.path,
+                         reason: "Photo path is not a directory",
+                         result: &result)
             return result
         }
 
@@ -84,7 +93,9 @@ final class LensAnalyzer {
                         continue
                     }
                 case .missingDate:
-                    result.skipped += 1
+                    recordSkipped(path: photo.path,
+                                  reason: cached.reason ?? "DateTimeOriginal missing",
+                                  result: &result)
                     result.cacheHits += 1
                     continue
                 }
@@ -93,9 +104,9 @@ final class LensAnalyzer {
             do {
                 let metadata = try readMetadata(from: photo)
                 guard let captureDate = captureDate(from: metadata) else {
-                    result.skipped += 1
-                    result.errors.append("DateTimeOriginal missing: \(photo.path)")
-                    if cache.storeMissingDate(for: photo) {
+                    let reason = "DateTimeOriginal missing"
+                    recordSkipped(path: photo.path, reason: reason, result: &result)
+                    if cache.storeMissingDate(reason: reason, for: photo) {
                         result.cacheWrites += 1
                     }
                     continue
@@ -112,8 +123,9 @@ final class LensAnalyzer {
                     result.cacheWrites += 1
                 }
             } catch {
-                result.failed += 1
-                result.errors.append(error.localizedDescription)
+                recordFailed(path: photo.path,
+                             reason: error.localizedDescription,
+                             result: &result)
             }
         }
 
@@ -167,6 +179,18 @@ final class LensAnalyzer {
         }
         usageByDate[dayKey, default: [:]][lens, default: 0] += 1
         result.analyzedPhotos += 1
+    }
+
+    private func recordSkipped(path: String, reason: String, result: inout LensAnalysisResult) {
+        result.skipped += 1
+        result.skippedIssues.append(LensIssue(path: path, reason: reason))
+        result.errors.append("\(reason): \(path)")
+    }
+
+    private func recordFailed(path: String, reason: String, result: inout LensAnalysisResult) {
+        result.failed += 1
+        result.failedIssues.append(LensIssue(path: path, reason: reason))
+        result.errors.append("\(reason): \(path)")
     }
 
     private func readMetadata(from url: URL) throws -> [String: Any] {
@@ -338,6 +362,7 @@ private struct CachedLensMetadata: Codable {
     let status: Status
     let dayKey: String?
     let lens: String?
+    let reason: String?
 }
 
 private struct FileFingerprint {
@@ -379,11 +404,12 @@ private final class LensMetadataCache {
                                                modificationTime: fingerprint.modificationTime,
                                                status: .analyzed,
                                                dayKey: dayKey,
-                                               lens: lens)
+                                               lens: lens,
+                                               reason: nil)
         return true
     }
 
-    func storeMissingDate(for url: URL) -> Bool {
+    func storeMissingDate(reason: String, for url: URL) -> Bool {
         guard let fingerprint = fingerprint(for: url) else {
             return false
         }
@@ -391,7 +417,8 @@ private final class LensMetadataCache {
                                                modificationTime: fingerprint.modificationTime,
                                                status: .missingDate,
                                                dayKey: nil,
-                                               lens: nil)
+                                               lens: nil,
+                                               reason: reason)
         return true
     }
 
