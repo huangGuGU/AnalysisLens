@@ -83,6 +83,17 @@ enum AppAccent {
         Color(red: 0.28, green: 0.52, blue: 0.75),
         Color(red: 0.66, green: 0.47, blue: 0.31)
     ]
+
+    static let curvePalette: [Color] = [
+        Color(red: 0.35, green: 0.74, blue: 0.98),
+        Color(red: 0.38, green: 0.92, blue: 0.82),
+        Color(red: 1.00, green: 0.73, blue: 0.36),
+        Color(red: 0.76, green: 0.62, blue: 1.00),
+        Color(red: 1.00, green: 0.52, blue: 0.58),
+        Color(red: 0.61, green: 0.82, blue: 0.45),
+        Color(red: 0.50, green: 0.78, blue: 1.00),
+        Color(red: 0.91, green: 0.66, blue: 0.42)
+    ]
 }
 
 enum UsageMode: Equatable {
@@ -125,7 +136,9 @@ final class AppModel: ObservableObject {
     @Published var highlightedLens: String?
     @Published var chartHighlightedLens: String?
     @Published var selectedDayKey: String?
+    @Published var highlightedDayKey: String?
     @Published var usageMode = UsageMode.lens
+    @Published var usageCurveEnabled = false
 
     var progressFraction: Double {
         guard total > 0 else {
@@ -217,6 +230,7 @@ final class AppModel: ObservableObject {
         highlightedLens = nil
         chartHighlightedLens = nil
         selectedDayKey = nil
+        highlightedDayKey = nil
         phase = "Scanning photos"
 
         let photoURL = URL(fileURLWithPath: analysisPath, isDirectory: true)
@@ -249,6 +263,13 @@ final class AppModel: ObservableObject {
         return AppAccent.palette[index % AppAccent.palette.count]
     }
 
+    func curveColor(for lens: String) -> Color {
+        guard let index = activeUsageNames.firstIndex(of: lens) else {
+            return AppAccent.lens
+        }
+        return AppAccent.curvePalette[index % AppAccent.curvePalette.count]
+    }
+
     func toggleChartHighlight(_ lens: String) {
         if highlightedLens == lens, chartHighlightedLens == lens {
             highlightedLens = nil
@@ -269,12 +290,14 @@ final class AppModel: ObservableObject {
         chartHighlightedLens = nil
     }
 
-    func selectDay(_ dateKey: String) {
+    func selectDay(_ dateKey: String, highlightBar: Bool) {
         selectedDayKey = dateKey
+        highlightedDayKey = highlightBar ? dateKey : nil
     }
 
     func clearChartSelection() {
         selectedDayKey = nil
+        highlightedDayKey = nil
         highlightedLens = nil
         chartHighlightedLens = nil
     }
@@ -282,6 +305,10 @@ final class AppModel: ObservableObject {
     func toggleUsageMode() {
         usageMode = usageMode == .lens ? .focalRange : .lens
         clearHighlight()
+    }
+
+    func toggleUsageCurve() {
+        usageCurveEnabled.toggle()
     }
 
     func clearMetadataCache() {
@@ -749,8 +776,17 @@ struct LensStackedBarChart: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if isDragging(value.translation) {
+                            handleChartDrag(at: value.location, size: proxy.size)
+                        }
+                    }
                     .onEnded { value in
-                        handleChartTap(at: value.location, size: proxy.size)
+                        if isDragging(value.translation) {
+                            handleChartDrag(at: value.location, size: proxy.size)
+                        } else {
+                            handleChartClick(at: value.location, size: proxy.size)
+                        }
                     }
             )
         }
@@ -761,7 +797,7 @@ struct LensStackedBarChart: View {
         }
         .animation(.easeOut(duration: 0.16), value: model.chartHighlightedLens)
         .animation(.easeOut(duration: 0.16), value: model.highlightedLens)
-        .animation(.easeOut(duration: 0.16), value: model.selectedDayKey)
+        .animation(.easeOut(duration: 0.16), value: model.highlightedDayKey)
     }
 
     private func drawChart(context: inout GraphicsContext, size: CGSize) {
@@ -775,6 +811,7 @@ struct LensStackedBarChart: View {
         for (index, day) in days.enumerated() {
             let x = xPosition(forDayIndex: index, metrics: metrics)
             var y = chartHeight
+            let barOpacity = dayOpacity(for: day)
 
             for lens in stackedLensNames() {
                 let count = day.counts[lens] ?? 0
@@ -789,10 +826,11 @@ struct LensStackedBarChart: View {
                                   y: max(0, y),
                                   width: barWidth,
                                   height: min(height, chartHeight))
-                context.fill(Path(rect), with: .color(model.color(for: lens).opacity(segmentOpacity(for: lens))))
+                context.fill(Path(rect), with: .color(model.color(for: lens).opacity(segmentOpacity(for: lens) * barOpacity)))
             }
         }
 
+        drawUsageCurve(context: &context, metrics: metrics)
         drawAxisLabels(context: &context, metrics: metrics)
     }
 
@@ -807,56 +845,99 @@ struct LensStackedBarChart: View {
         }
     }
 
-    private func handleChartTap(at location: CGPoint, size: CGSize) {
-        guard !days.isEmpty else {
+    private func handleChartClick(at location: CGPoint, size: CGSize) {
+        guard let selection = chartSelection(at: location, size: size) else {
             model.clearChartSelection()
-            return
-        }
-
-        let metrics = chartMetrics(for: size)
-        guard location.y >= 0, location.y <= size.height else {
-            model.clearChartSelection()
-            return
-        }
-
-        let step = metrics.barWidth + metrics.spacing
-        guard step > 0 else {
-            model.clearChartSelection()
-            return
-        }
-
-        let relativeX = location.x - metrics.leadingInset
-        guard relativeX >= 0 else {
-            model.clearChartSelection()
-            return
-        }
-
-        let dayIndex = Int(floor(relativeX / step))
-        guard days.indices.contains(dayIndex) else {
-            model.clearChartSelection()
-            return
-        }
-
-        let barX = xPosition(forDayIndex: dayIndex, metrics: metrics)
-        guard location.x >= barX, location.x <= barX + metrics.barWidth else {
-            model.clearChartSelection()
-            return
-        }
-
-        model.selectDay(days[dayIndex].dateKey)
-
-        guard location.y <= metrics.chartHeight else {
-            model.clearHighlight()
             return
         }
 
         if let lens = lens(at: location,
-                           day: days[dayIndex],
-                           chartHeight: metrics.chartHeight) {
+                           day: selection.day,
+                           chartHeight: selection.metrics.chartHeight) {
+            model.selectDay(selection.day.dateKey, highlightBar: true)
             model.highlightLensOnly(lens)
         } else {
-            model.clearHighlight()
+            model.clearChartSelection()
         }
+    }
+
+    private func handleChartDrag(at location: CGPoint, size: CGSize) {
+        guard let selection = chartDragSelection(at: location, size: size) else {
+            model.clearChartSelection()
+            return
+        }
+
+        model.selectDay(selection.day.dateKey, highlightBar: false)
+        model.clearHighlight()
+    }
+
+    private func chartSelection(at location: CGPoint, size: CGSize) -> ChartSelection? {
+        guard !days.isEmpty else {
+            return nil
+        }
+
+        let metrics = chartMetrics(for: size)
+        guard location.y >= 0, location.y <= size.height else {
+            return nil
+        }
+
+        let step = metrics.barWidth + metrics.spacing
+        guard step > 0 else {
+            return nil
+        }
+
+        let relativeX = location.x - metrics.leadingInset
+        guard relativeX >= 0 else {
+            return nil
+        }
+
+        let dayIndex = Int(floor(relativeX / step))
+        guard days.indices.contains(dayIndex) else {
+            return nil
+        }
+
+        let barX = xPosition(forDayIndex: dayIndex, metrics: metrics)
+        guard location.x >= barX, location.x <= barX + metrics.barWidth else {
+            return nil
+        }
+
+        guard location.y <= metrics.chartHeight else {
+            return nil
+        }
+
+        return ChartSelection(day: days[dayIndex], metrics: metrics)
+    }
+
+    private func chartDragSelection(at location: CGPoint, size: CGSize) -> ChartSelection? {
+        guard !days.isEmpty else {
+            return nil
+        }
+
+        let metrics = chartMetrics(for: size)
+        guard location.y >= 0, location.y <= metrics.chartHeight else {
+            return nil
+        }
+
+        let step = metrics.barWidth + metrics.spacing
+        guard step > 0 else {
+            return nil
+        }
+
+        let relativeX = location.x - metrics.leadingInset
+        guard relativeX >= 0 else {
+            return nil
+        }
+
+        let dayIndex = Int(floor(relativeX / step))
+        guard days.indices.contains(dayIndex) else {
+            return nil
+        }
+
+        return ChartSelection(day: days[dayIndex], metrics: metrics)
+    }
+
+    private func isDragging(_ translation: CGSize) -> Bool {
+        abs(translation.width) > 3 || abs(translation.height) > 3
     }
 
     private func lens(at location: CGPoint, day: LensDayUsage, chartHeight: CGFloat) -> String? {
@@ -912,6 +993,118 @@ struct LensStackedBarChart: View {
             return 1
         }
         return highlightedLens == lens ? 1 : 0.16
+    }
+
+    private func dayOpacity(for day: LensDayUsage) -> Double {
+        guard let highlightedDayKey = model.highlightedDayKey else {
+            return 1
+        }
+        return highlightedDayKey == day.dateKey ? 1 : 0.22
+    }
+
+    private func drawUsageCurve(context: inout GraphicsContext, metrics: ChartMetrics) {
+        guard model.usageCurveEnabled,
+              let highlightedLens = model.highlightedLens,
+              lensNames.contains(highlightedLens) else {
+            return
+        }
+
+        let points = movingAveragePoints(for: highlightedLens, metrics: metrics)
+        guard points.count > 1 else {
+            return
+        }
+
+        context.stroke(smoothedPath(points),
+                       with: .color(model.curveColor(for: highlightedLens).opacity(0.98)),
+                       style: StrokeStyle(lineWidth: 2.3, lineCap: .round, lineJoin: .round))
+    }
+
+    private func movingAveragePoints(for lens: String, metrics: ChartMetrics) -> [CGPoint] {
+        let maxTotal = max(days.map(\.total).max() ?? 1, 1)
+        let counts = days.map { Double($0.counts[lens] ?? 0) }
+        let averages = smoothValues(movingAverages(counts, window: 20), radius: 6)
+
+        return averages.enumerated().map { index, value in
+            let clamped = min(max(value, 0), Double(maxTotal))
+            let x = xPosition(forDayIndex: index, metrics: metrics) + metrics.barWidth / 2
+            let y = metrics.chartHeight - metrics.chartHeight * CGFloat(clamped) / CGFloat(maxTotal)
+            return CGPoint(x: x, y: y)
+        }
+    }
+
+    private func movingAverages(_ values: [Double], window: Int) -> [Double] {
+        guard window > 1 else {
+            return values
+        }
+
+        var averages: [Double] = []
+        averages.reserveCapacity(values.count)
+
+        for index in values.indices {
+            let start = max(values.startIndex, index - window + 1)
+            let slice = values[start...index]
+            averages.append(slice.reduce(0, +) / Double(slice.count))
+        }
+
+        return averages
+    }
+
+    private func smoothValues(_ values: [Double], radius: Int) -> [Double] {
+        guard values.count > 2, radius > 0 else {
+            return values
+        }
+
+        return values.indices.map { index in
+            let lowerBound = max(values.startIndex, index - radius)
+            let upperBound = min(values.index(before: values.endIndex), index + radius)
+            var weightedTotal = 0.0
+            var weightTotal = 0.0
+
+            for valueIndex in lowerBound...upperBound {
+                let distance = abs(valueIndex - index)
+                let weight = Double(radius + 1 - distance)
+                weightedTotal += values[valueIndex] * weight
+                weightTotal += weight
+            }
+
+            return weightTotal > 0 ? weightedTotal / weightTotal : values[index]
+        }
+    }
+
+    private func smoothedPath(_ points: [CGPoint]) -> Path {
+        var path = Path()
+        guard let first = points.first else {
+            return path
+        }
+
+        path.move(to: first)
+        guard points.count > 2,
+              let minY = points.map(\.y).min(),
+              let maxY = points.map(\.y).max() else {
+            for point in points.dropFirst() {
+                path.addLine(to: point)
+            }
+            return path
+        }
+
+        for index in 0..<(points.count - 1) {
+            let previous = points[max(index - 1, 0)]
+            let current = points[index]
+            let next = points[index + 1]
+            let following = points[min(index + 2, points.count - 1)]
+            let tension: CGFloat = 0.18
+            let control1 = CGPoint(x: current.x + (next.x - previous.x) * tension,
+                                   y: clamp(current.y + (next.y - previous.y) * tension, minY, maxY))
+            let control2 = CGPoint(x: next.x - (following.x - current.x) * tension,
+                                   y: clamp(next.y - (following.y - current.y) * tension, minY, maxY))
+            path.addCurve(to: next, control1: control1, control2: control2)
+        }
+
+        return path
+    }
+
+    private func clamp(_ value: CGFloat, _ lowerBound: CGFloat, _ upperBound: CGFloat) -> CGFloat {
+        min(max(value, lowerBound), upperBound)
     }
 
     private func stackedLensNames() -> [String] {
@@ -1064,6 +1257,11 @@ struct LensStackedBarChart: View {
         let leadingInset: CGFloat
         let trailingInset: CGFloat
     }
+
+    private struct ChartSelection {
+        let day: LensDayUsage
+        let metrics: ChartMetrics
+    }
 }
 
 struct EmptyChartState: View {
@@ -1086,21 +1284,40 @@ struct LensRankingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button(action: model.toggleUsageMode) {
-                HStack(spacing: 6) {
-                    Text(model.usageMode.title)
-                        .font(.system(size: 14, weight: .bold))
+            HStack(spacing: 8) {
+                Button(action: model.toggleUsageMode) {
+                    HStack(spacing: 6) {
+                        Text(model.usageMode.title)
+                            .font(.system(size: 14, weight: .bold))
 
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 11, weight: .bold))
-
-                    Spacer()
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    .foregroundStyle(AppAccent.photo)
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(AppAccent.photo)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .help(model.usageMode.toggleHelp)
+
+                Button(action: model.toggleUsageCurve) {
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 12, weight: .bold))
+                        .frame(width: 24, height: 22)
+                        .foregroundStyle(model.usageCurveEnabled ? AppAccent.lens : Color.secondary)
+                        .background {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(model.usageCurveEnabled ? AppAccent.lens.opacity(0.16) : Color.primary.opacity(0.06))
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder((model.usageCurveEnabled ? AppAccent.lens : Color.secondary).opacity(0.28), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .help(model.usageCurveEnabled ? "Hide usage curve" : "Show selected usage curve")
+
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .help(model.usageMode.toggleHelp)
 
             ScrollView {
                 VStack(spacing: 8) {
