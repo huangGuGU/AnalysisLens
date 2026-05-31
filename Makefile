@@ -25,7 +25,9 @@ CONFIG ?= debug
 SWIFT_OPTIMIZATION := $(if $(filter release,$(CONFIG)),-O,-Onone)
 SWIFTFLAGS := -target $(SWIFT_TARGET) -sdk "$(SDKROOT)" -module-cache-path "$(SWIFT_MODULE_CACHE_DIR)" -enable-incremental-imports -enable-incremental-file-hashing $(SWIFT_OPTIMIZATION)
 
-SWIFT_SOURCES := swift/src/LensAnalyzer.swift swift/src/AnalysisLensApp.swift
+SWIFT_SOURCES := $(sort $(shell find swift/src -name '*.swift'))
+TEST_BINARY := $(BUILD_DIR)/AppModelRegressionTests
+SWIFT_TEST_SOURCES := $(filter-out swift/src/App/AnalysisLensApp.swift,$(SWIFT_SOURCES)) swift/tests/AppModelRegressionTests.swift
 ICON_SOURCE := swift/resources/AppIcon.png
 DARK_ICON_SOURCE := swift/resources/AppIconDark.png
 ICON_FILE := $(BUILD_DIR)/AppIcon.icns
@@ -34,13 +36,16 @@ ICON_FLATTEN_TOOL := $(BUILD_DIR)/FlattenIcon
 LIGHT_ICON_BACKGROUND := ffffff
 DARK_ICON_STROKE := 2f2f2f
 
-.PHONY: all app swift dist dmg icon-from-png clean clean-cache run
+.PHONY: all app swift test dist dmg icon-from-png clean clean-cache run
 
 all: app
 
 app: swift
 
 swift: $(BUILD_APP)/Contents/MacOS/$(EXECUTABLE)
+
+test: $(TEST_BINARY)
+	"$(TEST_BINARY)"
 
 dist: CONFIG = release
 dist: app
@@ -104,6 +109,10 @@ $(BUILD_APP)/Contents/MacOS/$(EXECUTABLE): $(SWIFT_SOURCES) swift/resources/Info
 	@printf "APPL????" > "$(BUILD_APP)/Contents/PkgInfo"
 	@xattr -cr "$(BUILD_APP)"
 	codesign --force --deep --sign - "$(BUILD_APP)"
+
+$(TEST_BINARY): $(SWIFT_TEST_SOURCES)
+	@mkdir -p "$(BUILD_DIR)"
+	$(SWIFTC) $(SWIFTFLAGS) $(SWIFT_TEST_SOURCES) -o "$@"
 
 run: swift
 	open "$(BUILD_APP)"

@@ -1,54 +1,6 @@
 import Foundation
 import ImageIO
 
-struct AnalysisProgressUpdate {
-    let processed: Int
-    let total: Int
-    let currentFile: String
-}
-
-struct LensDayUsage: Identifiable {
-    let id = UUID()
-    let date: Date
-    let dateKey: String
-    let counts: [String: Int]
-
-    var total: Int {
-        counts.values.reduce(0, +)
-    }
-}
-
-struct LensTotal: Identifiable {
-    let id = UUID()
-    let lens: String
-    let count: Int
-}
-
-struct LensIssue: Identifiable {
-    let id = UUID()
-    let path: String
-    let reason: String
-}
-
-struct LensAnalysisResult {
-    var totalPhotos = 0
-    var analyzedPhotos = 0
-    var skipped = 0
-    var failed = 0
-    var cacheHits = 0
-    var cacheWrites = 0
-    var dayUsages: [LensDayUsage] = []
-    var lensTotals: [LensTotal] = []
-    var lensNames: [String] = []
-    var focalRangeDayUsages: [LensDayUsage] = []
-    var focalRangeTotals: [LensTotal] = []
-    var focalRangeNames: [String] = []
-    var elapsedSeconds = 0.0
-    var errors: [String] = []
-    var skippedIssues: [LensIssue] = []
-    var failedIssues: [LensIssue] = []
-}
-
 final class LensAnalyzer {
     private let fileManager = FileManager.default
     private let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tif", "tiff"]
@@ -82,6 +34,7 @@ final class LensAnalyzer {
 
         var usageByDate: [String: [String: Int]] = [:]
         var focalRangeUsageByDate: [String: [String: Int]] = [:]
+        var apertureUsageByLens: [String: [String: Int]] = [:]
         var firstSeenLens: [String] = []
         let cache = LensMetadataCache.load()
 
@@ -101,8 +54,10 @@ final class LensAnalyzer {
                         recordUsage(dayKey: dayKey,
                                     lens: lens,
                                     focalRange: focalRange,
+                                    apertureLabel: cached.apertureLabel,
                                     usageByDate: &usageByDate,
                                     focalRangeUsageByDate: &focalRangeUsageByDate,
+                                    apertureUsageByLens: &apertureUsageByLens,
                                     firstSeenLens: &firstSeenLens,
                                     result: &result)
                         result.cacheHits += 1
@@ -130,15 +85,22 @@ final class LensAnalyzer {
 
                 let lens = normalizedLensName(from: metadata)
                 let focalRange = focalRangeName(from: metadata)
+                let apertureLabel = apertureLabel(from: metadata)
                 let key = dayKey(for: captureDate)
                 recordUsage(dayKey: key,
                             lens: lens,
                             focalRange: focalRange,
+                            apertureLabel: apertureLabel,
                             usageByDate: &usageByDate,
                             focalRangeUsageByDate: &focalRangeUsageByDate,
+                            apertureUsageByLens: &apertureUsageByLens,
                             firstSeenLens: &firstSeenLens,
                             result: &result)
-                if cache.storeAnalyzed(dayKey: key, lens: lens, focalRange: focalRange, for: photo) {
+                if cache.storeAnalyzed(dayKey: key,
+                                       lens: lens,
+                                       focalRange: focalRange,
+                                       apertureLabel: apertureLabel,
+                                       for: photo) {
                     result.cacheWrites += 1
                 }
             } catch {
@@ -155,6 +117,7 @@ final class LensAnalyzer {
         result.focalRangeDayUsages = buildDayUsages(from: focalRangeUsageByDate)
         result.focalRangeTotals = buildFocalRangeTotals(from: focalRangeUsageByDate)
         result.focalRangeNames = result.focalRangeTotals.map(\.lens)
+        result.apertureTotalsByLens = buildApertureTotalsByLens(from: apertureUsageByLens)
         result.elapsedSeconds = Date().timeIntervalSince(start)
         return result
     }
@@ -198,8 +161,10 @@ final class LensAnalyzer {
     private func recordUsage(dayKey: String,
                              lens: String,
                              focalRange: String,
+                             apertureLabel: String?,
                              usageByDate: inout [String: [String: Int]],
                              focalRangeUsageByDate: inout [String: [String: Int]],
+                             apertureUsageByLens: inout [String: [String: Int]],
                              firstSeenLens: inout [String],
                              result: inout LensAnalysisResult) {
         if !firstSeenLens.contains(lens) {
@@ -207,6 +172,9 @@ final class LensAnalyzer {
         }
         usageByDate[dayKey, default: [:]][lens, default: 0] += 1
         focalRangeUsageByDate[dayKey, default: [:]][focalRange, default: 0] += 1
+        if let apertureLabel {
+            apertureUsageByLens[lens, default: [:]][apertureLabel, default: 0] += 1
+        }
         result.analyzedPhotos += 1
     }
 
@@ -308,19 +276,60 @@ final class LensAnalyzer {
         return nil
     }
 
+    private func apertureLabel(from metadata: [String: Any]) -> String? {
+        guard let aperture = apertureValue(from: metadata), aperture > 0 else {
+            return nil
+        }
+        return formattedAperture(aperture)
+    }
+
+    private func apertureValue(from metadata: [String: Any]) -> Double? {
+        let exif = metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]
+        if let value = numericValue(from: exif?[kCGImagePropertyExifFNumber as String]), value > 0 {
+            return value
+        }
+        if let apexValue = numericValue(from: exif?[kCGImagePropertyExifApertureValue as String]), apexValue > 0 {
+            return pow(2.0, apexValue / 2.0)
+        }
+        return nil
+    }
+
     private func numericFocalLength(from value: Any?) -> Double? {
+        guard let normalized = normalizedNumericString(from: value,
+                                                       removing: "mm") else {
+            return nil
+        }
+        return parseNormalizedNumericString(normalized)
+    }
+
+    private func numericValue(from value: Any?) -> Double? {
+        guard let normalized = normalizedNumericString(from: value,
+                                                       removing: nil) else {
+            return nil
+        }
+        return parseNormalizedNumericString(normalized)
+    }
+
+    private func normalizedNumericString(from value: Any?, removing unit: String?) -> String? {
         if let number = value as? NSNumber {
-            return number.doubleValue
+            return String(number.doubleValue)
         }
 
         guard let text = value as? String else {
             return nil
         }
 
-        let normalized = text
-            .replacingOccurrences(of: "mm", with: "", options: .caseInsensitive)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedText: String
+        if let unit {
+            normalizedText = text.replacingOccurrences(of: unit, with: "", options: .caseInsensitive)
+        } else {
+            normalizedText = text
+        }
 
+        return normalizedText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func parseNormalizedNumericString(_ normalized: String) -> Double? {
         if let number = Double(normalized) {
             return number
         }
@@ -334,6 +343,15 @@ final class LensAnalyzer {
         }
 
         return nil
+    }
+
+    private func formattedAperture(_ value: Double) -> String {
+        let rounded = (value * 10).rounded() / 10
+        let nearestInteger = rounded.rounded()
+        if abs(rounded - nearestInteger) < 0.05 {
+            return String(format: "f/%.0f", nearestInteger)
+        }
+        return String(format: "f/%.1f", rounded)
     }
 
     private func normalizedAppleMobileDevice(from value: Any?) -> String? {
@@ -350,8 +368,8 @@ final class LensAnalyzer {
             return nil
         }
 
-        if let prefix = prefixBeforeKeyword(" back ", in: normalized, lowercased: lowercased) ??
-            prefixBeforeKeyword(" front ", in: normalized, lowercased: lowercased) {
+        if let prefix = prefixBeforeKeyword(" back ", in: normalized, lowercased: lowercased)
+            ?? prefixBeforeKeyword(" front ", in: normalized, lowercased: lowercased) {
             return prefix
         }
         if let prefix = prefixBeforeKeyword(" camera", in: normalized, lowercased: lowercased) {
@@ -440,8 +458,37 @@ final class LensAnalyzer {
             }
     }
 
+    private func buildApertureTotalsByLens(from usageByLens: [String: [String: Int]]) -> [String: [ApertureTotal]] {
+        var totalsByLens: [String: [ApertureTotal]] = [:]
+
+        for (lens, counts) in usageByLens {
+            totalsByLens[lens] = counts
+                .compactMap { label, count in
+                    guard let value = apertureSortValue(for: label) else {
+                        return nil
+                    }
+                    return ApertureTotal(label: label, value: value, count: count)
+                }
+                .sorted {
+                    if $0.value == $1.value {
+                        return $0.count > $1.count
+                    }
+                    return $0.value < $1.value
+                }
+        }
+
+        return totalsByLens
+    }
+
     private func focalRangeSortIndex(for name: String) -> Int {
         focalRangeNames.firstIndex(of: name) ?? focalRangeNames.count
+    }
+
+    private func apertureSortValue(for label: String) -> Double? {
+        guard label.hasPrefix("f/") else {
+            return nil
+        }
+        return Double(label.dropFirst(2))
     }
 
     private func orderedLensNames(_ firstSeenLens: [String], totals: [LensTotal]) -> [String] {
@@ -452,147 +499,4 @@ final class LensAnalyzer {
         }
         return ordered
     }
-}
-
-enum LensAnalysisError: LocalizedError {
-    case message(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .message(let value):
-            return value
-        }
-    }
-}
-
-private struct CachedLensMetadata: Codable {
-    enum Status: String, Codable {
-        case analyzed
-        case missingDate
-    }
-
-    let fileSize: Int64
-    let modificationTime: TimeInterval
-    let status: Status
-    let dayKey: String?
-    let lens: String?
-    let focalRange: String?
-    let reason: String?
-}
-
-private struct FileFingerprint {
-    let fileSize: Int64
-    let modificationTime: TimeInterval
-}
-
-private final class LensMetadataCache {
-    private let fileManager = FileManager.default
-    private var records: [String: CachedLensMetadata]
-
-    private init(records: [String: CachedLensMetadata]) {
-        self.records = records
-    }
-
-    static func load() -> LensMetadataCache {
-        guard let data = try? Data(contentsOf: cacheURL),
-              let records = try? JSONDecoder().decode([String: CachedLensMetadata].self, from: data) else {
-            return LensMetadataCache(records: [:])
-        }
-        return LensMetadataCache(records: records)
-    }
-
-    static func clearAll() -> (removed: Int, failed: Int) {
-        var removed = 0
-        var failed = 0
-        let fileManager = FileManager.default
-
-        for url in cacheURLs {
-            guard fileManager.fileExists(atPath: url.path) else {
-                continue
-            }
-
-            do {
-                try fileManager.removeItem(at: url)
-                removed += 1
-            } catch {
-                failed += 1
-            }
-        }
-
-        return (removed, failed)
-    }
-
-    func metadata(for url: URL) -> CachedLensMetadata? {
-        guard let record = records[url.path],
-              let fingerprint = fingerprint(for: url),
-              record.fileSize == fingerprint.fileSize,
-              abs(record.modificationTime - fingerprint.modificationTime) < 0.001 else {
-            return nil
-        }
-        return record
-    }
-
-    func storeAnalyzed(dayKey: String, lens: String, focalRange: String, for url: URL) -> Bool {
-        guard let fingerprint = fingerprint(for: url) else {
-            return false
-        }
-        records[url.path] = CachedLensMetadata(fileSize: fingerprint.fileSize,
-                                               modificationTime: fingerprint.modificationTime,
-                                               status: .analyzed,
-                                               dayKey: dayKey,
-                                               lens: lens,
-                                               focalRange: focalRange,
-                                               reason: nil)
-        return true
-    }
-
-    func storeMissingDate(reason: String, for url: URL) -> Bool {
-        guard let fingerprint = fingerprint(for: url) else {
-            return false
-        }
-        records[url.path] = CachedLensMetadata(fileSize: fingerprint.fileSize,
-                                               modificationTime: fingerprint.modificationTime,
-                                               status: .missingDate,
-                                               dayKey: nil,
-                                               lens: nil,
-                                               focalRange: nil,
-                                               reason: reason)
-        return true
-    }
-
-    func save() {
-        do {
-            try fileManager.createDirectory(at: Self.cacheDirectory,
-                                            withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(records)
-            try data.write(to: Self.cacheURL, options: [.atomic])
-        } catch {
-            // Cache failures should not block analysis.
-        }
-    }
-
-    private func fingerprint(for url: URL) -> FileFingerprint? {
-        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
-              let fileSize = values.fileSize,
-              let modificationDate = values.contentModificationDate else {
-            return nil
-        }
-        return FileFingerprint(fileSize: Int64(fileSize),
-                               modificationTime: modificationDate.timeIntervalSince1970)
-    }
-
-    private static let cacheDirectory = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Library", isDirectory: true)
-        .appendingPathComponent("Caches", isDirectory: true)
-        .appendingPathComponent("AnalysisLens", isDirectory: true)
-
-    private static let cacheURL = cacheDirectory
-        .appendingPathComponent("lens-metadata-cache-v5.json")
-
-    private static let cacheURLs = [
-        "lens-metadata-cache-v2.json",
-        "lens-metadata-cache-v3.json",
-        "lens-metadata-cache-v4.json",
-        "lens-metadata-cache-v5.json"
-    ].map { cacheDirectory.appendingPathComponent($0) }
 }
